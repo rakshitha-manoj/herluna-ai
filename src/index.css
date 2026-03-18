@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Cormorant Garamond", serif;
+
+  --color-luna-purple: #5D4063;
+  --color-luna-purple-light: #8E7094;
+  --color-luna-cream: #FDFBF7;
+  --color-luna-card: #FFFFFF;
+  --color-luna-teal: #E0F2F1;
+  --color-luna-mint: #B2DFDB;
+  --color-luna-accent: #D1C4E9;
+  
+  --radius-luna: 2rem;
+}
+
+@layer base {
+  body {
+    @apply bg-luna-cream text-luna-purple font-sans;
+  }
+  
+  h1, h2, h3, h4 {
+    @apply font-serif font-semibold;
+  }
+}
+
+@layer components {
+  .luna-card {
+    @apply bg-luna-card rounded-luna p-6 shadow-sm border border-black/5;
+  }
+  
+  .luna-button-primary {
+    @apply bg-luna-purple text-white px-8 py-4 rounded-full font-medium transition-all hover:bg-luna-purple-light active:scale-95 disabled:opacity-50;
+  }
+
+  .luna-button-outline {
+    @apply border-2 border-luna-purple/20 text-luna-purple px-6 py-3 rounded-full font-medium transition-all hover:bg-luna-purple/5 active:scale-95;
+  }
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Cormorant+Garamond:wght@400;500;600;700&display=swap');

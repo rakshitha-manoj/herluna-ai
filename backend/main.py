@@ -32,13 +32,15 @@ anomaly_model = SymptomAutoencoder()
 forecaster = MultiTaskForecaster()
 rag_service = RAGService()
 
-# Initialize Gemini with Rotation Pool
+# Initialize Gemini with Rotation Pool (Loaded from .env)
 API_KEYS = [
-    "AIzaSyCRKpTa_hx6LG22LrRJZCqBgRzIicoHOx8",
-    "AIzaSyB--9AenCJMlrWgxIWawXiixXY9dCgG84I",
-    "AIzaSyBl72nCR0EV8wv5TaPl7DdH3iPFmxV7LPo",
-    "AIzaSyCct3ufm5Vlu_2EOt7X0MvLDnL3wtFMNkk"
+    os.getenv("GEMINI_KEY_1", ""),
+    os.getenv("GEMINI_KEY_2", ""),
+    os.getenv("GEMINI_KEY_3", ""),
+    os.getenv("GEMINI_KEY_4", "")
 ]
+# Filter out empty keys
+API_KEYS = [k for k in API_KEYS if k]
 current_key_state = {"index": 0}
 
 def get_next_gemini_key():
@@ -69,16 +71,76 @@ class ChatRequest(BaseModel):
     question: str
     history: List[dict] = []
 
+def extract_cycle_history(logs: List[DailyLog]) -> List[float]:
+    """Helper to extract a list of cycle lengths from daily logs based on flow entries."""
+    if not logs: return []
+    
+    from datetime import datetime
+    
+    # Sort logs by date
+    sorted_logs = sorted(logs, key=lambda x: x.date)
+    period_starts = []
+    
+    # Find start dates of periods (consecutive flow days count as one period)
+    last_was_flow = False
+    for log in sorted_logs:
+        has_flow = log.symptoms and any(s in ["Heavy Flow", "Medium Flow", "Light Flow"] for s in log.symptoms)
+        # Also check explicit flow field if it exists
+        if not has_flow and hasattr(log, 'flow') and log.flow and log.flow != "None":
+            has_flow = True
+            
+        if has_flow and not last_was_flow:
+            period_starts.append(datetime.strptime(log.date, "%Y-%m-%d"))
+        last_was_flow = has_flow
+        
+    # Calculate intervals between starts
+    cycle_lengths = []
+    for i in range(1, len(period_starts)):
+        diff = (period_starts[i] - period_starts[i-1]).days
+        if 20 < diff < 45: # Filter out unrealistic gaps
+            cycle_lengths.append(float(diff))
+            
+    return cycle_lengths
+
 @app.get("/")
 async def root():
     return {"message": "HerLuna AI Intelligence Engine is Online"}
 
 @app.post("/predict/cycle")
 async def predict_cycle(request: PredictionRequest):
-    # Format sequence for LSTM
-    seq = [float(request.profile.cycleLength)]  # Simplified sequence
+    # Extract historical cycle lengths from logs
+    history = extract_cycle_history(request.logs)
+    
+    # Default to user's profile length if history is empty
+    current_avg = float(request.profile.cycleLength)
+    
+    # ADAPTIVE LEARNING TRIGGER
+    if len(history) >= 2:
+        print(f"[AdaptiveLearning] Found {len(history)} cycles. Personalizing model...")
+        from backend.models.cycle_predictor import train_model
+        # History includes the most recent completed cycle
+        train_model(cycle_model, history)
+        
+    # Format sequence for prediction
+    # If we have history, use the last 3 values (pad if necessary)
+    if history:
+        seq = history[-5:] # Last 5 cycles
+    else:
+        seq = [current_avg]
+    
     pred = predict_next_cycle(cycle_model, seq)
-    return {"prediction": f"Next period expected in {int(pred)} days", "confidence": 0.85, "model": "LSTM"}
+    
+    # Sanity check: If prediction is wild (due to random weights or low data), 
+    # blend it with the user's reported average
+    if len(history) < 3:
+        pred = (pred * 0.3) + (current_avg * 0.7)
+        
+    return {
+        "prediction": f"Next period expected in {int(pred)} days",
+        "confidence": 0.85 if len(history) >= 3 else 0.60,
+        "model": "LSTM-Adaptive" if len(history) >= 2 else "LSTM-Baseline",
+        "learningStatus": "Personalized" if len(history) >= 3 else "Learning..."
+    }
 
 @app.post("/predict/symptoms")
 async def predict_symptoms(request: PredictionRequest):
@@ -236,19 +298,51 @@ Your recent stress levels average {avg_stress:.0f}/10, so anti-inflammatory food
 🧘 **Luteal Phase**: Switch to moderate activities like pilates, swimming, or cycling
 🌸 **Menstrual Phase**: Honor your body with gentle yoga, walking, or stretching"""
 
-    elif any(w in question_lower for w in ["cramp", "pain", "symptom", "bloat"]):
+    elif any(w in question_lower for w in ["cramp", "pain", "symptom", "bloat", "headache", "pms", "migraine"]):
         symptoms_list = []
         for l in recent_logs:
             symptoms_list.extend(l.symptoms)
         common_symptoms = list(set(symptoms_list))[:5] if symptoms_list else ["none tracked recently"]
         
-        return f"""Your recent symptoms include: {', '.join(common_symptoms)}.
-
+        return f"""Your recent symptoms include: {', '.join(common_symptoms)}. 
+        
 💊 **Symptom management tips**:
-- For cramps: Heat therapy, gentle stretching, and magnesium-rich foods can provide relief
-- For bloating: Reduce sodium intake and increase water consumption
-- Anti-inflammatory foods (turmeric, ginger, berries) can help with multiple symptoms
-- Track your symptoms consistently to identify patterns across your cycle"""
+- **Cramps**: Try heat therapy, magnesium-rich foods (dark chocolate, pumpkin seeds), and gentle pelvic tilts.
+- **Bloating**: Reduce refined salt and increase potassium (bananas, avocados). Peppermint tea can also help.
+- **Headaches**: Hormonal shifts can trigger migraines. Ensure consistent sleep and hydration ({avg_sleep:.0f}h avg).
+- **Track consistently**: The more you log, the better I can predict these patterns!"""
+
+    elif any(w in question_lower for w in ["pcos", "pco", "pcis", "irregular", "hormone", "imbalance"]):
+        return f"""Luna here! Dealing with cycle irregularities like PCOS or PCIS requires a dedicated approach to insulin management:
+        
+✨ **Personalized Advice**:
+- **Glucose Stability**: This is priority #1. Never eat a "naked carb"—always pair it with healthy fats or protein.
+- **Inflammation**: Your recent stress is at {avg_stress:.0f}/10. High stress triggers androgens, which can worsen PCOS symptoms. Try 10 minutes of walking after meals.
+- **Consistency**: The model is learning your specific rhythm. Keep logging to see your personal 'Irregularity Score' improve."""
+
+    elif any(w in question_lower for w in ["skin", "acne", "breakout", "glow"]):
+        return f"""Skin health is deeply tied to your cycle phase:
+        
+✨ **Phase-based skincare**:
+- **Luteal**: Progesterone rises, increasing sebum. Focus on deep cleansing and anti-inflammatory foods.
+- **Menstrual**: Estrogen is low, and skin can be dry. Focus on hydration and barrier repair.
+- **Follicular**: Estrogen is rising—this is usually your 'glow' phase! Great time for new products.
+- **Tip**: Limit dairy and refined sugar if you're prone to hormonal breakouts."""
+
+    elif any(w in question_lower for w in ["caffeine", "coffee", "alcohol", "drink"]):
+        return f"""Impact of habits on your rhythm (Recent Avg Stress: {avg_stress:.0f}/10):
+        
+☕ **Caffeine**: Try to limit caffeine after 2 PM, especially in your luteal phase, as your body clears it slower then.
+🍷 **Alcohol**: Can significantly disrupt your core temperature and sleep quality ({avg_sleep:.0f}h avg). 
+🍵 **Switch it up**: If you're feeling anxious, try Tulsi or Chamomile tea to support your nervous system."""
+
+    elif any(w in question_lower for w in ["privacy", "data", "secure", "safe"]):
+        return """Your privacy is my foundation. 💜
+
+🛡️ **How I protect you**:
+- **Local-First**: Your data is stored right on your device, not on a random server.
+- **Encrypted Sync**: If you use cloud sync, it's fully encrypted via Firebase.
+- **No Selling**: We never sell or share your personal health data. You are in total control."""
 
     else:
         return f"""Hi! I'm Luna, your wellness companion 💜

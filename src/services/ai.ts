@@ -2,25 +2,25 @@ import { GoogleGenAI } from "@google/genai";
 import { DailyLog, UserProfile, CyclePhase, ChatMessage, Prediction, getPhase } from "../types";
 
 const API_KEYS = [
-  "AIzaSyCRKpTa_hx6LG22LrRJZCqBgRzIicoHOx8",
-  "AIzaSyB--9AenCJMlrWgxIWawXiixXY9dCgG84I",
-  "AIzaSyBl72nCR0EV8wv5TaPl7DdH3iPFmxV7LPo",
-  "AIzaSyCct3ufm5Vlu_2EOt7X0MvLDnL3wtFMNkk"
-];
+  import.meta.env.VITE_GEMINI_KEY_1,
+  import.meta.env.VITE_GEMINI_KEY_2,
+  import.meta.env.VITE_GEMINI_KEY_3,
+  import.meta.env.VITE_GEMINI_KEY_4
+].filter(Boolean);
 
 let currentKeyIndex = 0;
 const getAiInstance = () => {
-  const apiKey = API_KEYS[currentKeyIndex];
+  const apiKey = API_KEYS[currentKeyIndex] || import.meta.env.VITE_GEMINI_API_KEY;
   currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length;
   return new GoogleGenAI({ apiKey });
 };
 
 const BACKEND_URLS = [
-  "http://192.168.1.5:8000", // Physical Phone (Primary WiFi Bridge)
-  "http://10.0.2.2:8000",   // Android Emulator Default
-  "http://10.0.3.2:8000",   // Genymotion/Other
-  "http://localhost:8000"    // Web/Capacitor Bridge
-];
+  import.meta.env.VITE_BACKEND_URL_1,
+  import.meta.env.VITE_BACKEND_URL_2,
+  import.meta.env.VITE_BACKEND_URL_3,
+  import.meta.env.VITE_BACKEND_URL_4
+].filter(Boolean) || ["http://localhost:8000"];
 
 let activeBackendUrl = BACKEND_URLS[0];
 
@@ -161,6 +161,16 @@ const getLocalSmartResponse = (question: string, profile: UserProfile | null, cu
     return `During the ${currentPhase} phase, your metabolism shifts. ${tips[currentPhase]}`;
   }
 
+  if (q.includes("tired") || q.includes("energy") || q.includes("fatigue") || q.includes("exhausted")) {
+    const tips = {
+      'Menstrual': "Low energy is expected as hormones are at their lowest. Focus on restorative rest and iron-rich foods.",
+      'Follicular': "Your energy should be rising. If you're tired, check your iron levels or sleep quality.",
+      'Ovulatory': "This is usually your peak energy phase. Unexpected fatigue here might suggest high stress.",
+      'Luteal': "Progesterone can cause drowsiness and 'brain fog'. Prioritize magnesium and consistent sleep schedules."
+    };
+    return `It makes sense to feel that way. In your ${currentPhase} phase: ${tips[currentPhase]}`;
+  }
+
   if (q.includes("exercise") || q.includes("workout") || q.includes("gym") || q.includes("move")) {
     const tips = {
       'Menstrual': "Gentle movement like Yin yoga or walking is best while your body is in a state of renewal.",
@@ -171,12 +181,24 @@ const getLocalSmartResponse = (question: string, profile: UserProfile | null, cu
     return `Your energy levels are heavily influenced by your cycle. ${tips[currentPhase]}`;
   }
 
-  if (q.includes("pcos") || q.includes("irregular")) {
-    return "Irregular cycles can be influenced by many factors including stress, nutrition, and hormonal conditions like PCOS. The data you're logging helps me identify these patterns so we can discuss them more specifically.";
+  if (q.includes("pcos") || q.includes("pco") || q.includes("pcis") || q.includes("irregular")) {
+    return "Luna's PCOS Guidance: Managing hormonal imbalances like PCOS is all about glucose stability. Focus on pairing every carb with a protein (like apple + almond butter) to prevent insulin spikes. In your current phase, anti-inflammatory habits are your best friend.";
+  }
+
+  if (q.includes("skin") || q.includes("acne") || q.includes("breakout")) {
+    return `Hormonal acne often correlates with the Luteal phase. During your ${currentPhase} phase, focus on anti-inflammatory nutrition and keeping your hydration levels high to support skin clarity.`;
+  }
+
+  if (q.includes("caffeine") || q.includes("coffee") || q.includes("drink") || q.includes("alcohol")) {
+    return `Your nervous system is more sensitive to stimulants in the Luteal and Menstrual phases. In your ${currentPhase} phase, try to monitor how caffeine affects your sleep and stress logs.`;
   }
 
   if (q.includes("anxious") || q.includes("anxiety") || q.includes("mood") || q.includes("stress")) {
     return `It's very common to feel ${q.includes("anxious") ? "anxious" : "shifted"} during certain parts of your cycle, especially the Luteal phase. Deep breathing, magnesium intake, and quality sleep can help stabilize these neural shifts.`;
+  }
+
+  if (q.includes("privacy") || q.includes("secure") || q.includes("data")) {
+    return "HerLuna AI is designed for 'Local-First' privacy. Your sensitive health data is stored directly on your device and is never sold. If you choose to sync to the cloud, it remains fully encrypted.";
   }
 
   return `That's an interesting question about your ${currentPhase} health. As your dedicated cycle assistant, I recommend tracking your specific symptoms daily so I can provide more personalized insights into your unique rhythm.`;
@@ -214,10 +236,22 @@ export const askAssistant = async (question: string, profile: UserProfile | null
     const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
     return text || getLocalSmartResponse(question, profile, currentPhase);
   } catch (error) {
-    console.log("[Luna Chat] Gemini failed/exhausted, using Local Intelligence fallback", error);
+    console.log("[Luna Chat] Gemini failed/exhausted, trying Backend RAG fallback...");
     
-    // 3. FALLBACK: Use local smart response
-    return getLocalSmartResponse(question, profile, currentPhase);
+    // 3. Try Backend RAG Fallback
+    try {
+      const response = await tryBackend("/chat/respond", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile, logs, question, history })
+      });
+      const data = await response.json();
+      return data.response;
+    } catch (backendError) {
+      console.log("[Luna Chat] Backend RAG also failed, using Frontend Rule-Based fallback");
+      // 4. FINAL FALLBACK: Local rule-based response
+      return getLocalSmartResponse(question, profile, currentPhase);
+    }
   }
 };
 

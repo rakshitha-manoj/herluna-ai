@@ -18,13 +18,33 @@ class CycleLSTM(nn.Module):
         out = self.fc(out[:, -1, :])
         return out
 
-def train_model(model, data, epochs=100):
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+def train_model(model, history, epochs=50):
+    """
+    Trains the CycleLSTM model on a sequence of historical cycle lengths.
+    history: List of floats representing past cycle durations.
+    """
+    if len(history) < 2:
+        return # Not enough data to train
     
-    # Placeholder for training logic
-    # In a real scenario, this would involve a proper data loader
-    pass
+    model.train()
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    
+    # Prepare data: X = [c1, c2, ... cn-1], y = [cn]
+    # For a simple online update, we treat the last known cycle as the target
+    inputs = torch.tensor(history[:-1], dtype=torch.float32).view(1, -1, 1)
+    target = torch.tensor([history[-1]], dtype=torch.float32).view(1, 1)
+    
+    for epoch in range(epochs):
+        optimizer.zero_grad()
+        # Ensure input sequence matches expected input_size if necessary
+        # Here we just pass the variable length sequence (PyTorch LSTM handles it)
+        output = model(inputs)
+        loss = criterion(output, target)
+        loss.backward()
+        optimizer.step()
+    
+    print(f"[CyclePredictor] Model updated with user history. Final loss: {loss.item():.4f}")
 
 def predict_next_cycle(model, seq):
     model.eval()

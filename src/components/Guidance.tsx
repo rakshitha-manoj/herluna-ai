@@ -58,7 +58,7 @@ Daily Stress Relievers:
 ];
 
 export const Guidance: React.FC = () => {
-  const { profile, travelPlans, addTravelPlan, removeTravelPlan } = useLuna();
+  const { profile, travelPlans, addTravelPlan, removeTravelPlan, dynamicCycleLength, dynamicPeriodLength, dynamicLastStart } = useLuna();
   const [showAddTravel, setShowAddTravel] = useState(false);
   const [newTravel, setNewTravel] = useState({ destination: '', startDate: '', endDate: '' });
   const [selectedArticle, setSelectedArticle] = useState<GuidanceArticle | null>(null);
@@ -95,9 +95,9 @@ export const Guidance: React.FC = () => {
 
   const checkPeriodOverlap = (travelStart: string, travelEnd: string) => {
     if (!profile) return false;
-    const lastStart = new Date(profile.lastPeriodStart);
-    const cycleLen = profile.cycleLength || 28;
-    const periodLen = profile.periodLength || 5;
+    const lastStart = dynamicLastStart;
+    const cycleLen = dynamicCycleLength;
+    const periodLen = dynamicPeriodLength;
     
     const tStart = startOfDay(parseISO(travelStart));
     const tEnd = startOfDay(parseISO(travelEnd));

@@ -6,7 +6,7 @@ import { DailyLog, SYMPTOM_OPTIONS, MOOD_OPTIONS, FLOW_LEVELS, Symptom } from '.
 import { motion, AnimatePresence } from 'motion/react';
 
 export const Calendar: React.FC = () => {
-  const { profile, logs, addLog, startPeriod, endPeriod } = useLuna();
+  const { profile, logs, addLog, startPeriod, endPeriod, dynamicCycleLength, dynamicPeriodLength, dynamicLastStart } = useLuna();
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [showLogModal, setShowLogModal] = useState(false);
@@ -21,17 +21,21 @@ export const Calendar: React.FC = () => {
     end: endDate
   });
 
-  const lastStart = profile ? new Date(profile.lastPeriodStart) : new Date();
-  const cycleLen = profile?.cycleLength || 28;
-  const periodLen = profile?.periodLength || 5;
-
-  // Accurate prediction for next 6 cycles
+  // 3. GENERATE PREDICTIONS
+  // If today is far from dynamicLastStart, index 0 should be the CURRENT predicted cycle, not just next.
   const predictions = Array.from({ length: 6 }).map((_, i) => {
-    const start = addDays(lastStart, (i + 1) * cycleLen);
-    const end = addDays(start, periodLen - 1);
+    const today = new Date();
+    const daysSinceLast = differenceInDays(today, dynamicLastStart);
+    
+    // If it's been more than a full cycle since last start, we need to shift the first prediction to "now"
+    const offset = Math.floor(daysSinceLast / dynamicCycleLength);
+    const start = addDays(dynamicLastStart, (i + Math.max(0, offset)) * dynamicCycleLength);
+    const end = addDays(start, dynamicPeriodLength - 1);
+    
     const ovulationDay = addDays(start, -14);
     const ovulationStart = addDays(ovulationDay, -4);
     const ovulationEnd = ovulationDay;
+    
     return { start, end, ovulationStart, ovulationEnd };
   });
 
@@ -47,34 +51,104 @@ export const Calendar: React.FC = () => {
     return logs.find(log => isSameDay(new Date(log.date), date));
   };
 
+  // 4. Calculate Cycle Variability and Next Predicted Target
+  const cycleStats = React.useMemo(() => {
+    const periodStarts = logs
+      .filter(l => l.flow && l.flow !== 'None')
+      .map(l => new Date(l.date))
+      .sort((a, b) => a.getTime() - b.getTime());
+
+    const distinctStarts: Date[] = [];
+    if (periodStarts.length > 0) {
+      let currentStart = periodStarts[0];
+      distinctStarts.push(currentStart);
+      for (let i = 1; i < periodStarts.length; i++) {
+        const diff = (periodStarts[i].getTime() - periodStarts[i-1].getTime()) / (1000 * 60 * 60 * 24);
+        if (diff > 7) { 
+          currentStart = periodStarts[i];
+          distinctStarts.push(currentStart);
+        }
+      }
+    }
+
+    const intervals: number[] = [];
+    for (let i = 1; i < distinctStarts.length; i++) {
+      intervals.push((distinctStarts[i].getTime() - distinctStarts[i-1].getTime()) / (1000 * 60 * 60 * 24));
+    }
+
+    const avg = intervals.length > 0 ? intervals.reduce((a, b) => a + b, 0) / intervals.length : dynamicCycleLength;
+    const variancy = intervals.length > 0 ? Math.sqrt(intervals.map(x => Math.pow(x - avg, 2)).reduce((a, b) => a + b, 0) / intervals.length) : 0;
+    
+    // Find absolute next prediction (the one that hasn't started yet)
+    const nextTarget = predictions.find(p => p.start > new Date()) || predictions[0];
+
+    const confidence = logs.length < 7 ? 'Early Stage' : logs.length < 20 ? 'Learning' : logs.length < 40 ? 'Calibrated' : 'High Precision';
+
+    return {
+      isIrregular: variancy > 3 || (intervals.length > 1 && Math.abs(Math.max(...intervals) - Math.min(...intervals)) > 7),
+      variancy,
+      nextTarget,
+      confidence
+    };
+  }, [logs, predictions, dynamicCycleLength]);
+
   const isActualPeriod = (date: Date) => {
     const d = startOfDay(date);
     
-    // Check if there's a log with flow on this day
+    // 1. Check if there's a log with flow on this day
     const log = logs.find(l => isSameDay(new Date(l.date), d));
     if (log && log.flow && log.flow !== 'None') return true;
 
-    // Check active period
+    // 2. Check active period (currently ongoing)
     if (profile?.activePeriodStart) {
       const activeStart = startOfDay(new Date(profile.activePeriodStart));
       const today = startOfDay(new Date());
+      const predictedEnd = addDays(activeStart, dynamicPeriodLength - 1);
       
-      // Highlight from start to today (actual bleeding)
-      if (isWithinInterval(d, { start: activeStart, end: today })) return true;
-      
-      // Also highlight predicted duration if it's active and hasn't reached it yet
-      const predictedEnd = addDays(activeStart, periodLen - 1);
-      if (isWithinInterval(d, { start: activeStart, end: predictedEnd })) return true;
+      // If today is within the predicted window of the active start, highlight it
+      if (isWithinInterval(d, { start: activeStart, end: max([today, predictedEnd]) })) return true;
     }
 
-    // Check historical last period
-    const historical = isWithinInterval(d, { 
-      start: startOfDay(lastStart), 
-      end: startOfDay(addDays(lastStart, periodLen - 1)) 
-    });
+    // 3. Project windows from ALL distinct period starts found in logs
+    // This ensures that if you log a start, the next 4-5 days (periodLength) stay highlighted automatically
+    const periodStarts = logs
+      .filter(l => l.flow && l.flow !== 'None')
+      .map(l => new Date(l.date))
+      .sort((a,b) => a.getTime() - b.getTime());
 
-    return historical;
+    const distinctStarts: Date[] = [];
+    if (periodStarts.length > 0) {
+      let currentStart = periodStarts[0];
+      distinctStarts.push(currentStart);
+      for (let i = 1; i < periodStarts.length; i++) {
+        const diff = (periodStarts[i].getTime() - periodStarts[i-1].getTime()) / (1000 * 60 * 60 * 24);
+        if (diff > 7) { 
+          currentStart = periodStarts[i];
+          distinctStarts.push(currentStart);
+        }
+      }
+    }
+
+    return distinctStarts.find(start => {
+      const windowStart = startOfDay(start);
+      const windowEnd = addDays(windowStart, dynamicPeriodLength - 1);
+      
+      // If the date is within the window, check if there's any 'None' log between start and d
+      if (isWithinInterval(d, { start: windowStart, end: windowEnd })) {
+        const hasEndLog = logs.some(l => {
+          const logDate = startOfDay(new Date(l.date));
+          return isAfter(logDate, windowStart) && (isBefore(logDate, d) || isSameDay(logDate, d)) && l.flow === 'None';
+        });
+        return !hasEndLog;
+      }
+      return false;
+    }) !== undefined;
   };
+
+  const isAfter = (a: Date, b: Date) => a.getTime() > b.getTime();
+  const isBefore = (a: Date, b: Date) => a.getTime() < b.getTime();
+
+  const max = (dates: Date[]) => new Date(Math.max(...dates.map(d => d.getTime())));
 
   const handlePeriodToggle = () => {
     if (profile?.activePeriodStart) {
@@ -145,18 +219,21 @@ export const Calendar: React.FC = () => {
                 >
                   <div className={`
                     w-10 h-10 flex items-center justify-center rounded-full text-sm font-sans transition-all
-                    ${isTodayDate ? 'border-2 border-luna-purple font-bold' : ''}
-                    ${period ? `${flowColor} text-rose-900 font-bold` : ''}
-                    ${predicted ? 'bg-rose-50 text-rose-400' : ''}
-                    ${ovulation ? 'bg-amber-50 text-amber-600' : ''}
+                    ${isTodayDate ? 'ring-2 ring-luna-purple ring-offset-2' : ''}
+                    ${period ? `${flowColor} text-rose-900 font-bold border-2 border-rose-400` : ''}
+                    ${predicted && !period ? 'bg-rose-50/50 border-2 border-dashed border-rose-300 text-rose-400' : ''}
+                    ${ovulation && !period ? 'border-2 border-amber-400 bg-amber-50/50 shadow-sm' : ''}
                   `}>
                     {format(day, 'd')}
                   </div>
-                  {logEntry && !period && (
+                  {ovulation && !period && (
+                    <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-500 shadow-sm border border-white" />
+                  )}
+                  {logEntry && !period && !ovulation && (
                     <div className="absolute bottom-1 w-1 h-1 rounded-full bg-luna-purple/40" />
                   )}
                   {logEntry?.flow && logEntry.flow !== 'None' && (
-                    <div className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-rose-500" />
+                    <div className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-rose-500 border border-white" />
                   )}
                 </button>
               );
@@ -174,11 +251,13 @@ export const Calendar: React.FC = () => {
               <span className="text-[9px] font-sans uppercase tracking-widest opacity-50">Flow Intensity</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-rose-50 border border-rose-100" />
+              <div className="w-3 h-3 rounded-full bg-rose-50/50 border-2 border-dashed border-rose-300" />
               <span className="text-[9px] font-sans uppercase tracking-widest opacity-50">Predicted</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-amber-50 border border-amber-100" />
+              <div className="w-3 h-3 rounded-full bg-amber-50/50 border-2 border-amber-400 relative">
+                <div className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-amber-500 border border-white" />
+              </div>
               <span className="text-[9px] font-sans uppercase tracking-widest opacity-50">Fertile Window</span>
             </div>
             <div className="flex items-center gap-2">
@@ -188,7 +267,6 @@ export const Calendar: React.FC = () => {
           </div>
         </div>
 
-        {/* Cycle Intelligence Card */}
         <div className="bg-white rounded-[32px] p-8 shadow-sm border border-black/5 space-y-4">
           <div className="flex items-center gap-2 text-luna-purple">
             <Sparkles className="w-4 h-4" />
@@ -196,22 +274,24 @@ export const Calendar: React.FC = () => {
           </div>
           <div className="space-y-1">
             <h2 className="text-3xl font-serif text-luna-purple">
-              {profile?.activePeriodStart 
-                ? `${format(new Date(profile.activePeriodStart), 'MMM d')} — ${format(addDays(new Date(profile.activePeriodStart), periodLen - 1), 'd')}`
-                : `${format(predictions[0].start, 'MMM d')} — ${format(predictions[0].end, 'd')}`
-              }
+              {format(cycleStats.nextTarget.start, 'MMM d')} — {format(cycleStats.nextTarget.end, 'd')}
             </h2>
-            <p className="text-xs opacity-40">Insight: No deviations detected yet.</p>
+            <p className="text-xs opacity-40">
+              Insight: {cycleStats.isIrregular 
+                ? "Cycle variability detected. AI is adapting to your irregularities." 
+                : "No significant deviations detected in your patterns."}
+            </p>
           </div>
         </div>
 
-        {/* Cycle History Card */}
         <div className="bg-white rounded-[32px] p-8 shadow-sm border border-black/5 space-y-4">
           <h3 className="text-xl font-serif text-luna-purple">Cycle History</h3>
           <div className="space-y-2">
-            <p className="text-sm font-bold text-luna-purple/60">Confidence Level: Early Stage</p>
+            <p className="text-sm font-bold text-luna-purple/60">Confidence Level: {cycleStats.confidence}</p>
             <p className="text-sm opacity-40 leading-relaxed">
-              Continue logging to refine cycle predictions.
+              {logs.length > 40 
+                ? "Your data volume is excellent. Predictions are highly optimized." 
+                : "Continue logging to further refine cycle predictions."}
             </p>
           </div>
         </div>
@@ -304,7 +384,9 @@ export const Calendar: React.FC = () => {
         {selectedDate && showLogModal && (
           <LogModal 
             date={selectedDate} 
-            onClose={() => setShowLogModal(false)} 
+            isPredictedFlow={isOvulationWindow(selectedDate)}
+            isWithinPeriod={isActualPeriod(selectedDate)}
+            onClose={() => setShowLogModal(false)}
             onSave={(log) => {
               addLog(log);
               setShowLogModal(false);
@@ -316,9 +398,18 @@ export const Calendar: React.FC = () => {
   );
 };
 
-const LogModal: React.FC<{ date: Date; onClose: () => void; onSave: (log: DailyLog) => void }> = ({ date, onClose, onSave }) => {
-  const { logs, profile } = useLuna();
+const LogModal: React.FC<{ 
+  date: Date; 
+  isPredictedFlow?: boolean;
+  isWithinPeriod?: boolean;
+  onClose: () => void; 
+  onSave: (log: DailyLog) => void 
+}> = ({ date, isPredictedFlow, isWithinPeriod, onClose, onSave }) => {
+  const { logs, profile, endPeriod, addLog } = useLuna();
   const existingLog = logs.find(l => isSameDay(new Date(l.date), date));
+
+  const isBefore = (a: Date, b: Date) => a.getTime() < b.getTime();
+  const isSameDayDate = (a: Date, b: Date) => isSameDay(a, b);
   
   const isPeriodActive = profile?.activePeriodStart && isWithinInterval(startOfDay(date), {
     start: startOfDay(new Date(profile.activePeriodStart)),
@@ -333,7 +424,7 @@ const LogModal: React.FC<{ date: Date; onClose: () => void; onSave: (log: DailyL
   const [hydration, setHydration] = useState(existingLog?.hydration || 8);
   const [diet, setDiet] = useState(existingLog?.diet || 'Balanced');
   const [journal, setJournal] = useState(existingLog?.journal || '');
-  const [flow, setFlow] = useState<'None' | 'Light' | 'Medium' | 'Heavy'>(existingLog?.flow || (isPeriodActive ? 'Medium' : 'None'));
+  const [flow, setFlow] = useState<'None' | 'Light' | 'Medium' | 'Heavy'>(existingLog?.flow || (isPeriodActive || isPredictedFlow ? 'Medium' : 'None'));
   const [hasFlow, setHasFlow] = useState(flow !== 'None');
   const [notes, setNotes] = useState(existingLog?.notes || '');
 
@@ -390,13 +481,59 @@ const LogModal: React.FC<{ date: Date; onClose: () => void; onSave: (log: DailyL
                   checked={hasFlow} 
                   onChange={(e) => {
                     setHasFlow(e.target.checked);
-                    if (!e.target.checked) setFlow('None');
-                    else if (flow === 'None') setFlow('Medium');
+                    if (!e.target.checked) {
+                      setFlow('None');
+                    } else if (flow === 'None') {
+                      setFlow('Medium');
+                    }
                   }}
                   className="w-5 h-5 rounded border-black/10 text-luna-purple focus:ring-luna-purple accent-luna-purple"
                 />
                 <label htmlFor="period-toggle" className="text-[10px] font-sans uppercase tracking-widest text-luna-purple font-bold cursor-pointer">I'm on my period</label>
               </div>
+              
+              {(profile?.activePeriodStart || isWithinPeriod) && (
+                <button
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    // If no active start, try to find the logical start for this window
+                    let targetStart = profile?.activePeriodStart;
+                    if (!targetStart) {
+                      const periodStarts = logs
+                        .filter(l => l.flow && l.flow !== 'None')
+                        .map(l => new Date(l.date))
+                        .sort((a,b) => b.getTime() - a.getTime());
+                      
+                      const nearestStart = periodStarts.find(s => isBefore(s, date) || isSameDayDate(s, date));
+                      if (nearestStart) targetStart = nearestStart.toISOString();
+                    }
+
+                    if (targetStart) {
+                      await endPeriod(date);
+                      // Force a "None" log for tomorrow to explicitly terminate the window projection
+                      const tomorrow = addDays(date, 1);
+                      addLog({
+                        date: tomorrow.toISOString().split('T')[0],
+                        flow: 'None',
+                        symptoms: [],
+                        mood: 'Stable',
+                        energy: 5,
+                        stress: 5,
+                        sleep: 8,
+                        exercise: false,
+                        hydration: 8,
+                        diet: 'Balanced',
+                        journal: 'Period ended.',
+                        notes: ''
+                      });
+                    }
+                    onClose();
+                  }}
+                  className="px-4 py-2 bg-rose-600 text-white rounded-full text-[10px] font-bold uppercase tracking-widest transition-all shadow-lg shadow-rose-600/20 hover:scale-105 active:scale-95 shrink-0"
+                >
+                  End Period Today
+                </button>
+              )}
             </div>
             
             {hasFlow && (
@@ -521,6 +658,13 @@ const LogModal: React.FC<{ date: Date; onClose: () => void; onSave: (log: DailyL
                     <span className="text-luna-purple">{sleep}h</span>
                   </div>
                   <input type="range" min="1" max="12" step="0.5" value={sleep} onChange={(e) => setSleep(parseFloat(e.target.value))} className="w-full h-1.5 bg-luna-cream rounded-lg appearance-none cursor-pointer accent-luna-purple" />
+                </div>
+                <div className="space-y-2">
+                  <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest">
+                    <span className="opacity-40">Hydration (Glasses)</span>
+                    <span className="text-luna-purple">{hydration}</span>
+                  </div>
+                  <input type="range" min="0" max="15" step="1" value={hydration} onChange={(e) => setHydration(parseInt(e.target.value))} className="w-full h-1.5 bg-luna-cream rounded-lg appearance-none cursor-pointer accent-luna-purple" />
                 </div>
               </div>
             </div>

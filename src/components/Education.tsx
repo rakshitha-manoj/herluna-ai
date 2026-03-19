@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { BookOpen, Heart, Zap, Moon, Sun, ShieldCheck, Sparkles, X, Clock, Lightbulb } from 'lucide-react';
+import { BookOpen, Heart, Zap, Moon, Sun, ShieldCheck, Sparkles, X, Clock, Lightbulb, Plane, Plus, Trash2, AlertCircle } from 'lucide-react';
 import { useLuna } from '../LunaContext';
 import { getPhase } from '../types';
 import { generateDailyTip } from '../services/ai';
+import { format, addDays, startOfDay, parseISO } from 'date-fns';
 
 interface Article {
 // ... (rest of the interface)
@@ -69,7 +70,7 @@ Focus: Estrogen Support
 Seeds: 1-2 tbsp of raw, ground flax and pumpkin seeds daily.
 Why: Flax seeds contain lignans which bind to excess estrogen, while pumpkin seeds are high in zinc, supporting progesterone production for the next phase.
 
-Phase 2: Luteal (Days 15-28)
+Phase 2: Luteal (Days 15-End of Cycle)
 Focus: Progesterone Support
 Seeds: 1-2 tbsp of raw, ground sesame and sunflower seeds daily.
 Why: Sesame seeds contain lignans that help block excess estrogen, while sunflower seeds are high in Vitamin E and selenium, supporting progesterone levels.
@@ -107,15 +108,46 @@ Tip: You may feel more critical; use this to catch errors, but be kind to yourse
 ];
 
 export const Education: React.FC = () => {
-  const { profile } = useLuna();
+  const { profile, travelPlans, addTravelPlan, removeTravelPlan, dynamicCycleLength, dynamicPeriodLength, dynamicLastStart } = useLuna();
   const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
   const [dailyTip, setDailyTip] = useState<string | null>(null);
   const [loadingTip, setLoadingTip] = useState(true);
+  const [showAddTravel, setShowAddTravel] = useState(false);
+  const [newTravel, setNewTravel] = useState({ destination: '', startDate: '', endDate: '' });
+
+  const checkPeriodOverlap = (travelStart: string, travelEnd: string) => {
+    if (!profile) return false;
+    const lastStart = dynamicLastStart;
+    const cycleLen = dynamicCycleLength;
+    const periodLen = dynamicPeriodLength;
+    
+    const tStart = startOfDay(parseISO(travelStart));
+    const tEnd = startOfDay(parseISO(travelEnd));
+
+    // Check next 6 cycles
+    for (let i = 0; i < 6; i++) {
+      const pStart = addDays(lastStart, (i + 1) * cycleLen);
+      const pEnd = addDays(pStart, periodLen - 1);
+
+      const overlap = (tStart <= pEnd && tEnd >= pStart);
+      if (overlap) return true;
+    }
+    return false;
+  };
+
+  const handleAddTravel = () => {
+    if (newTravel.destination && newTravel.startDate && newTravel.endDate) {
+      addTravelPlan({
+        id: Math.random().toString(36).substr(2, 9),
+        ...newTravel
+      });
+      setNewTravel({ destination: '', startDate: '', endDate: '' });
+      setShowAddTravel(false);
+    }
+  };
 
   const today = new Date();
-  const lastStart = new Date(profile?.lastPeriodStart || today);
-  const cycleLen = profile?.cycleLength || 28;
-  const phase = getPhase(today, lastStart, cycleLen, profile?.activePeriodStart);
+  const phase = getPhase(today, dynamicLastStart, dynamicCycleLength, profile?.activePeriodStart);
 
   useEffect(() => {
     const fetchTip = async () => {
@@ -142,6 +174,101 @@ export const Education: React.FC = () => {
         <h1 className="text-4xl font-serif tracking-tight text-luna-purple">Knowledge Base</h1>
         <p className="text-[10px] font-sans uppercase tracking-[0.3em] opacity-50">Empower Your Rhythm</p>
       </header>
+
+      <section className="px-8">
+        <div className="bg-white border border-black/5 p-6 rounded-[24px] space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-luna-purple/60">
+              <Plane className="w-4 h-4" />
+              <span className="text-[10px] uppercase tracking-widest font-bold">Travel Planner</span>
+            </div>
+            <button 
+              onClick={() => setShowAddTravel(!showAddTravel)}
+              className="p-2 bg-luna-purple/5 rounded-full text-luna-purple"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          </div>
+
+          <AnimatePresence>
+            {showAddTravel && (
+              <motion.div 
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="space-y-4 overflow-hidden"
+              >
+                <input 
+                  type="text" 
+                  placeholder="Destination"
+                  value={newTravel.destination}
+                  onChange={e => setNewTravel({...newTravel, destination: e.target.value})}
+                  className="w-full bg-black/5 border-none rounded-xl py-3 px-4 text-sm outline-none focus:ring-1 ring-luna-purple/20"
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase tracking-widest font-bold opacity-40 ml-1">Start Date</label>
+                    <input 
+                      type="date" 
+                      value={newTravel.startDate}
+                      onChange={e => setNewTravel({...newTravel, startDate: e.target.value})}
+                      className="w-full bg-black/5 border-none rounded-xl py-3 px-4 text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase tracking-widest font-bold opacity-40 ml-1">End Date</label>
+                    <input 
+                      type="date" 
+                      value={newTravel.endDate}
+                      onChange={e => setNewTravel({...newTravel, endDate: e.target.value})}
+                      className="w-full bg-black/5 border-none rounded-xl py-3 px-4 text-sm"
+                    />
+                  </div>
+                </div>
+                <button 
+                  onClick={handleAddTravel}
+                  className="w-full luna-button-primary py-3 text-sm"
+                >
+                  Add Trip
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div className="space-y-3">
+            {travelPlans.length === 0 ? (
+              <p className="text-[10px] opacity-40 italic text-center py-2">No upcoming travel plans logged.</p>
+            ) : (
+              travelPlans.map(plan => {
+                const hasOverlap = checkPeriodOverlap(plan.startDate, plan.endDate);
+                return (
+                  <div key={plan.id} className="p-4 bg-black/5 rounded-2xl space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="font-bold text-sm tracking-tight">{plan.destination}</h4>
+                        <p className="text-[10px] opacity-50">
+                          {format(parseISO(plan.startDate), 'MMM d')} — {format(parseISO(plan.endDate), 'MMM d, yyyy')}
+                        </p>
+                      </div>
+                      <button onClick={() => removeTravelPlan(plan.id)} className="p-2 opacity-30 hover:opacity-100 transition-opacity">
+                        <Trash2 className="w-4 h-4 text-rose-500" />
+                      </button>
+                    </div>
+                    {hasOverlap && (
+                      <div className="flex items-center gap-2 p-3 bg-rose-50 text-rose-700 rounded-xl border border-rose-100">
+                        <AlertCircle className="w-4 h-4 shrink-0" />
+                        <p className="text-[9px] font-bold uppercase tracking-tight leading-none">
+                          Period Alert: Predicted during this trip.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </section>
 
       <section className="px-8 grid grid-cols-1 gap-6">
         <div className="bg-luna-purple text-white p-8 rounded-[32px] relative overflow-hidden shadow-2xl shadow-luna-purple/20">

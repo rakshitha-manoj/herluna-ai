@@ -10,7 +10,7 @@ interface OnboardingProps {
 }
 
 export const Onboarding: React.FC<OnboardingProps> = ({ onBack }) => {
-  const { setProfile } = useLuna();
+  const { setProfile, signup } = useLuna();
   const [step, setStep] = useState(0);
   const [viewDate, setViewDate] = useState(new Date());
   const [data, setData] = useState<Partial<UserProfile>>({
@@ -32,14 +32,25 @@ export const Onboarding: React.FC<OnboardingProps> = ({ onBack }) => {
     else setStep(s => s - 1);
   };
 
-  const finish = () => {
+  const finish = async () => {
     const finalData = { ...data };
     if (data.lastPeriodStart && data.lastPeriodEnd) {
       const start = new Date(data.lastPeriodStart);
       const end = new Date(data.lastPeriodEnd);
       finalData.periodLength = Math.max(1, differenceInDays(end, start) + 1);
     }
-    setProfile(finalData as UserProfile);
+    
+    if (data.storageMode === 'Cloud' && data.email && data.password) {
+      try {
+        await signup(data.email, data.password, finalData as UserProfile);
+      } catch (error: any) {
+        console.error("Signup failed", error);
+        alert(`Signup failed: ${error.message || 'Unknown error'}. Please check your internet or use Local storage.`);
+        return;
+      }
+    } else {
+      setProfile(finalData as UserProfile);
+    }
   };
 
   const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);

@@ -21,9 +21,13 @@ interface LunaContextType {
   addChatMessage: (m: ChatMessage) => void;
   setPredictions: (p: Prediction[]) => void;
   resetAllData: () => void;
-  login: () => Promise<void>;
+  signup: (email: string, password: string, p: UserProfile) => Promise<void>;
+  login: (email?: string, password?: string) => Promise<void>;
   logout: () => Promise<void>;
   isInitialized: boolean;
+  dynamicCycleLength: number;
+  dynamicPeriodLength: number;
+  dynamicLastStart: Date;
 }
 
 const LunaContext = createContext<LunaContextType | undefined>(undefined);
@@ -50,13 +54,77 @@ export const LunaProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const savedPreds = localStorage.getItem('luna_preds');
         
         if (savedProfile) setProfileState(JSON.parse(savedProfile));
-        if (savedLogs) setLogs(JSON.parse(savedLogs));
+        if (savedLogs) {
+          const parsedLogs = JSON.parse(savedLogs);
+          setLogs(parsedLogs);
+          // Auto-seed if empty for demo
+          if (parsedLogs.length === 0) {
+            triggerAutoSeed();
+          }
+        } else {
+          // No logs at all, trigger auto-seed
+          triggerAutoSeed();
+        }
         if (savedTravel) setTravelPlans(JSON.parse(savedTravel));
         if (savedChat) setChatMessages(JSON.parse(savedChat));
         if (savedPreds) setPredictionsState(JSON.parse(savedPreds));
       }
       setIsInitialized(true);
     });
+
+    const triggerAutoSeed = () => {
+      // Small timeout to ensure context is ready
+      setTimeout(() => {
+        const hasSeeded = localStorage.getItem('luna_demo_seeded');
+        if (!hasSeeded) {
+          generateSeedData();
+          localStorage.setItem('luna_demo_seeded', 'true');
+        }
+      }, 1000);
+    };
+
+    const generateSeedData = () => {
+      const newLogs: any[] = [];
+      const now = new Date();
+      let cursor = new Date(now);
+      
+      const gaps = [120, 90, 180, 110];
+      const durations = [10, 6, 8, 4, 12];
+      
+      for (let i = 0; i < 5; i++) {
+        const duration = durations[i % durations.length];
+        for (let d = 0; d < duration; d++) {
+          newLogs.push({
+            date: cursor.toISOString().split('T')[0],
+            flow: d < 2 ? 'Heavy' : d < 5 ? 'Medium' : 'Light',
+            symptoms: [{ id: '1', name: 'Cramps', severity: 2 }],
+            mood: 'Irritable', energy: 3, stress: 7, sleep: 6, hydration: 4, exercise: false
+          });
+          cursor.setDate(cursor.getDate() - 1);
+        }
+        const gap = gaps[i % gaps.length];
+        for (let g = 0; g < 15; g++) {
+          const randomGapDate = new Date(cursor);
+          randomGapDate.setDate(cursor.getDate() - Math.floor(Math.random() * gap));
+          newLogs.push({
+            date: randomGapDate.toISOString().split('T')[0],
+            flow: 'None', symptoms: [{ id: '2', name: 'Fatigue', severity: 1 }],
+            mood: 'Stable', energy: 5, stress: 4, sleep: 7, hydration: 6, exercise: true
+          });
+        }
+        cursor.setDate(cursor.getDate() - gap);
+      }
+      
+      const sorted = newLogs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      setLogs(sorted);
+      localStorage.setItem('luna_logs', JSON.stringify(sorted));
+      
+      // Update profile
+      const latest = sorted.find(l => l.flow !== 'None');
+      if (latest) {
+        setProfileState(prev => prev ? ({ ...prev, lastPeriodStart: latest.date, isIrregular: true }) : null);
+      }
+    };
 
     // Safety timeout: if Firebase auth doesn't respond within 5 seconds,
     // initialize anyway using local storage data
@@ -88,33 +156,49 @@ export const LunaProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Cloud Sync Listener
   useEffect(() => {
-    if (user && profile?.storageMode === 'Cloud') {
+    // If we have a user, always try to sync from Cloud if they choose it 
+    // or if we don't have a profile yet (checking for existing cloud account)
+    if (user) {
       const unsubProfile = onSnapshot(doc(db, 'users', user.uid), (doc) => {
-        if (doc.exists()) setProfileState(doc.data() as UserProfile);
+        if (doc.exists()) {
+          const cloudData = doc.data() as UserProfile;
+          setProfileState(cloudData);
+          localStorage.setItem('luna_profile', JSON.stringify(cloudData));
+        }
       });
-      const unsubLogs = onSnapshot(collection(db, 'users', user.uid, 'logs'), (snapshot) => {
-        const cloudLogs = snapshot.docs.map(d => d.data() as DailyLog);
-        setLogs(cloudLogs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
-      });
-      const unsubTravel = onSnapshot(collection(db, 'users', user.uid, 'travel'), (snapshot) => {
-        setTravelPlans(snapshot.docs.map(d => d.data() as TravelPlan));
-      });
-      const unsubChat = onSnapshot(collection(db, 'users', user.uid, 'chat'), (snapshot) => {
-        const cloudChat = snapshot.docs.map(d => d.data() as ChatMessage);
-        setChatMessages(cloudChat.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()));
-      });
-      const unsubPreds = onSnapshot(doc(db, 'users', user.uid, 'predictions', 'current'), (doc) => {
-        if (doc.exists()) setPredictionsState(doc.data().list as Prediction[]);
-      });
+
+      // Only sync collections if we are confirmed in Cloud mode
+      let unsubLogs: (() => void) | undefined;
+      let unsubTravel: (() => void) | undefined;
+      let unsubChat: (() => void) | undefined;
+      let unsubPreds: (() => void) | undefined;
+
+      if (profile?.storageMode === 'Cloud' || !profile) {
+        unsubLogs = onSnapshot(collection(db, 'users', user.uid, 'logs'), (snapshot) => {
+          const cloudLogs = snapshot.docs.map(d => d.data() as DailyLog);
+          setLogs(cloudLogs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+        });
+        unsubTravel = onSnapshot(collection(db, 'users', user.uid, 'travel'), (snapshot) => {
+          setTravelPlans(snapshot.docs.map(d => d.data() as TravelPlan));
+        });
+        unsubChat = onSnapshot(collection(db, 'users', user.uid, 'chat'), (snapshot) => {
+          const cloudChat = snapshot.docs.map(d => d.data() as ChatMessage);
+          setChatMessages(cloudChat.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()));
+        });
+        unsubPreds = onSnapshot(doc(db, 'users', user.uid, 'predictions', 'current'), (doc) => {
+          if (doc.exists()) setPredictionsState(doc.data().list as Prediction[]);
+        });
+      }
+
       return () => {
         unsubProfile();
-        unsubLogs();
-        unsubTravel();
-        unsubChat();
-        unsubPreds();
+        unsubLogs?.();
+        unsubTravel?.();
+        unsubChat?.();
+        unsubPreds?.();
       };
     }
-  }, [user, profile?.storageMode]);
+  }, [user, profile?.storageMode === 'Cloud']);
 
   const setProfile = async (p: UserProfile) => {
     setProfileState(p);
@@ -144,6 +228,12 @@ export const LunaProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const addLog = async (l: DailyLog) => {
+    // 1. Hard restrict against logging future dates natively at the controller level
+    if (new Date(l.date) > new Date()) {
+      console.warn("HerLuna blocks logging data for future dates.");
+      return;
+    }
+
     const newLogs = [...logs.filter(log => log.date !== l.date), l].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     setLogs(newLogs);
     localStorage.setItem('luna_logs', JSON.stringify(newLogs));
@@ -199,8 +289,23 @@ export const LunaProvider: React.FC<{ children: React.ReactNode }> = ({ children
     window.location.reload();
   };
 
-  const login = async () => {
-    await signInWithGoogle();
+  const login = async (email?: string, password?: string) => {
+    if (email && password) {
+      const { signInWithEmailAndPassword } = await import('./firebase');
+      await signInWithEmailAndPassword(auth, email, password);
+    } else {
+      await signInWithGoogle();
+    }
+  };
+
+  const signup = async (email: string, password: string, p: UserProfile) => {
+    const { createUserWithEmailAndPassword } = await import('./firebase');
+    const result = await createUserWithEmailAndPassword(auth, email, password);
+    if (result.user) {
+      // After signup, save the profile to Firestore
+      await setDoc(doc(db, 'users', result.user.uid), { ...p, storageMode: 'Cloud' });
+      setProfileState({ ...p, storageMode: 'Cloud' });
+    }
   };
 
   const logout = async () => {
@@ -211,6 +316,74 @@ export const LunaProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setChatMessages([]);
     setPredictionsState([]);
   };
+
+  const dynamicLastStart = React.useMemo(() => {
+    const manualDate = profile?.lastPeriodStart ? new Date(profile.lastPeriodStart) : new Date(0);
+    const flowLogs = logs
+      .filter(l => l.flow && l.flow !== 'None')
+      .map(l => new Date(l.date))
+      .sort((a,b) => b.getTime() - a.getTime());
+
+    if (flowLogs.length > 0) {
+      let latestFlow = flowLogs[0];
+      for (let i = 1; i < flowLogs.length; i++) {
+        const diff = (latestFlow.getTime() - flowLogs[i].getTime()) / (1000 * 60 * 60 * 24);
+        if (diff <= 5) {
+          latestFlow = flowLogs[i]; // walk backwards to the start of this period block
+        } else {
+          break;
+        }
+      }
+      return latestFlow > manualDate ? latestFlow : manualDate;
+    }
+    return manualDate.getTime() > 0 ? manualDate : new Date();
+  }, [logs, profile?.lastPeriodStart]);
+
+  const { dynamicCycleLength, dynamicPeriodLength } = React.useMemo(() => {
+    const periodStarts = logs
+      .filter(l => l.flow && l.flow !== 'None')
+      .map(l => new Date(l.date))
+      .sort((a, b) => a.getTime() - b.getTime()); // oldest first
+
+    const distinctStarts: { start: Date, end: Date }[] = [];
+    if (periodStarts.length > 0) {
+      let currentStart = periodStarts[0];
+      let currentEnd = periodStarts[0];
+      for (let i = 1; i < periodStarts.length; i++) {
+        const diff = (periodStarts[i].getTime() - periodStarts[i-1].getTime()) / (1000 * 60 * 60 * 24);
+        if (diff > 7) { 
+          distinctStarts.push({ start: currentStart, end: currentEnd });
+          currentStart = periodStarts[i];
+        }
+        currentEnd = periodStarts[i];
+      }
+      distinctStarts.push({ start: currentStart, end: currentEnd });
+    }
+
+    if (distinctStarts.length < 2) {
+      let knownPeriodLen = profile?.periodLength || 5;
+      if (distinctStarts.length === 1) {
+          knownPeriodLen = Math.max(1, (distinctStarts[0].end.getTime() - distinctStarts[0].start.getTime()) / (1000 * 60 * 60 * 24) + 1);
+      }
+      return { 
+        dynamicCycleLength: profile?.cycleLength || 28, 
+        dynamicPeriodLength: knownPeriodLen
+      };
+    }
+
+    let totalCycle = 0;
+    let totalPeriod = 0;
+    for (let i = 1; i < distinctStarts.length; i++) {
+      totalCycle += (distinctStarts[i].start.getTime() - distinctStarts[i-1].start.getTime()) / (1000 * 60 * 60 * 24);
+      totalPeriod += (distinctStarts[i-1].end.getTime() - distinctStarts[i-1].start.getTime()) / (1000 * 60 * 60 * 24) + 1;
+    }
+    totalPeriod += (distinctStarts[distinctStarts.length-1].end.getTime() - distinctStarts[distinctStarts.length-1].start.getTime()) / (1000 * 60 * 60 * 24) + 1;
+
+    return { 
+      dynamicCycleLength: Math.max(20, Math.round(totalCycle / (distinctStarts.length - 1))),
+      dynamicPeriodLength: Math.max(1, Math.round(totalPeriod / distinctStarts.length))
+    };
+  }, [logs, profile?.cycleLength, profile?.periodLength]);
 
   return (
     <LunaContext.Provider value={{ 
@@ -229,9 +402,13 @@ export const LunaProvider: React.FC<{ children: React.ReactNode }> = ({ children
       addChatMessage,
       setPredictions,
       resetAllData,
+      signup,
       login,
       logout,
-      isInitialized 
+      isInitialized,
+      dynamicCycleLength,
+      dynamicPeriodLength,
+      dynamicLastStart
     }}>
       {children}
     </LunaContext.Provider>

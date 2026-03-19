@@ -11,16 +11,17 @@ import { PredictiveDashboard } from './PredictiveDashboard';
 import Simulator from './Simulator';
 
 export const Home: React.FC<{ onLogClick: () => void }> = ({ onLogClick }) => {
-  const { profile, logs, predictions, setPredictions } = useLuna();
+  const { profile, logs, predictions, setPredictions, dynamicCycleLength, dynamicPeriodLength, dynamicLastStart } = useLuna();
   const [insights, setInsights] = useState<string[]>([]);
   const [correlations, setCorrelations] = useState<{ habit: string, correlation: string, strength: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const today = new Date();
-  const lastStart = new Date(profile?.lastPeriodStart || today);
-  const cycleLen = profile?.cycleLength || 28;
-  const periodLen = profile?.periodLength || 5;
+  
+  const lastStart = dynamicLastStart;
+  const cycleLen = dynamicCycleLength;
+  const periodLen = dynamicPeriodLength;
   const phase = getPhase(today, lastStart, cycleLen, profile?.activePeriodStart);
   
   const cycleDay = profile?.activePeriodStart 
@@ -51,31 +52,71 @@ export const Home: React.FC<{ onLogClick: () => void }> = ({ onLogClick }) => {
   };
 
   useEffect(() => {
-    if (profile) {
-      Promise.all([
-        generateInsights(profile, logs, phase),
-        getHabitCorrelations(logs)
-      ]).then(([ins, corr]) => {
-        setInsights(ins);
-        setCorrelations(corr);
+    const initData = async () => {
+      if (!profile) return;
+      
+      try {
+        // Only fetch predictions if we don't have any yet
+        if (predictions.length === 0) {
+          const [ins, corr, preds] = await Promise.all([
+            generateInsights(profile, logs, phase),
+            getHabitCorrelations(logs),
+            getPredictions(profile, logs, phase)
+          ]);
+          setInsights(ins);
+          setCorrelations(corr);
+          setPredictions(preds);
+        } else {
+          const [ins, corr] = await Promise.all([
+            generateInsights(profile, logs, phase),
+            getHabitCorrelations(logs)
+          ]);
+          setInsights(ins);
+          setCorrelations(corr);
+        }
+      } catch (error) {
+        console.error("Home Init Error:", error);
+      } finally {
         setLoading(false);
-      });
-
-      if (predictions.length === 0) {
-        refreshPredictions();
       }
-    }
-  }, [profile, logs, phase]);
+    };
 
-  const chartData = [
-    { day: 1, val: 20 },
-    { day: 5, val: 35 },
-    { day: 10, val: 45 },
-    { day: 14, val: 70 },
-    { day: 20, val: 55 },
-    { day: 25, val: 30 },
-    { day: 28, val: 20 },
-  ];
+    initData();
+  }, [profile?.id, logs.length]); // Only refresh if profile changes or log count changes
+
+  const chartData = React.useMemo(() => {
+    const periodStarts = logs
+      .filter(l => l.flow && l.flow !== 'None')
+      .map(l => new Date(l.date))
+      .sort((a, b) => a.getTime() - b.getTime());
+
+    const distinctStarts: { start: Date }[] = [];
+    if (periodStarts.length > 0) {
+      let currentStart = periodStarts[0];
+      for (let i = 1; i < periodStarts.length; i++) {
+        const diff = (periodStarts[i].getTime() - periodStarts[i-1].getTime()) / (1000 * 60 * 60 * 24);
+        if (diff > 7) { 
+          distinctStarts.push({ start: currentStart });
+          currentStart = periodStarts[i];
+        }
+      }
+      distinctStarts.push({ start: currentStart });
+    }
+
+    const history = [];
+    for (let i = 1; i < distinctStarts.length; i++) {
+        const cycleDiff = (distinctStarts[i].start.getTime() - distinctStarts[i-1].start.getTime()) / (1000 * 60 * 60 * 24);
+        history.push({ day: i, val: Math.round(cycleDiff) });
+    }
+    
+    if (history.length < 2) return [
+      { day: 1, val: profile?.cycleLength || 28 },
+      { day: 2, val: profile?.cycleLength || 28 },
+      { day: 3, val: profile?.cycleLength || 28 }
+    ];
+
+    return history.slice(-6);
+  }, [logs, profile]);
 
   return (
     <div className="space-y-6 pb-24">
@@ -254,7 +295,7 @@ export const Home: React.FC<{ onLogClick: () => void }> = ({ onLogClick }) => {
           <p className="text-sm italic opacity-60">
             {logs.length === 0 
               ? "HerLuna will identify trends in your cycle regularity as you add more logs."
-              : "Insight: Cycle length variability has decreased by 12% recently."}
+              : `Insight: Your cycle length is currently averaging ${Math.round(chartData.reduce((s,d)=>s+d.val,0)/chartData.length)} days.`}
           </p>
         </div>
       </section>

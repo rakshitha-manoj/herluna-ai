@@ -11,7 +11,7 @@ import { ChatBubble } from './components/ChatBubble';
 import { Home as HomeIcon, Calendar as CalendarIcon, BarChart2, BookOpen, Settings as SettingsIcon, ChevronRight, Lock, Heart } from 'lucide-react';
 
 const AppContent: React.FC = () => {
-  const { profile, isInitialized } = useLuna();
+  const { profile, isInitialized, login } = useLuna();
   const [showSplash, setShowSplash] = useState(true);
   const [authMode, setAuthMode] = useState<'choice' | 'onboarding' | 'login'>('choice');
   const [activeTab, setActiveTab] = useState<'home' | 'calendar' | 'insights' | 'guidance' | 'settings'>('home');
@@ -20,6 +20,13 @@ const AppContent: React.FC = () => {
     const timer = setTimeout(() => setShowSplash(false), 2500);
     return () => clearTimeout(timer);
   }, []);
+
+  // Force home tab on login
+  useEffect(() => {
+    if (profile && !showSplash) {
+      setActiveTab('home');
+    }
+  }, [profile?.email, showSplash]);
 
   if (!isInitialized || showSplash) return <SplashScreen />;
 
@@ -89,16 +96,22 @@ const AppContent: React.FC = () => {
           <div className="space-y-8">
             <h1 className="text-4xl font-serif">Welcome Back</h1>
             <div className="space-y-4">
-              <input type="email" placeholder="Email" className="w-full bg-white border-2 border-black/5 rounded-2xl p-4 outline-none focus:border-luna-purple" />
-              <input type="password" placeholder="Password" className="w-full bg-white border-2 border-black/5 rounded-2xl p-4 outline-none focus:border-luna-purple" />
+              <input id="login-email" type="email" placeholder="Email" className="w-full bg-white border-2 border-black/5 rounded-2xl p-4 outline-none focus:border-luna-purple" />
+              <input id="login-password" type="password" placeholder="Password" className="w-full bg-white border-2 border-black/5 rounded-2xl p-4 outline-none focus:border-luna-purple" />
               <button 
-                onClick={() => {
-                  // In a real app, we'd call a login service here.
-                  // For this demo, we'll simulate a successful login by setting a dummy profile if none exists,
-                  // or just letting the context handle it if the user is already "logged in" via Firebase.
-                  // Since we want to redirect to Home, and activeTab defaults to 'home', we just need to ensure
-                  // the profile is loaded.
-                  window.location.reload(); // Simple way to trigger re-init if needed, or just set a flag
+                onClick={async () => {
+                  const email = (document.getElementById('login-email') as HTMLInputElement)?.value;
+                  const password = (document.getElementById('login-password') as HTMLInputElement)?.value;
+                  if (email && password) {
+                    try {
+                      await login(email, password);
+                    } catch (error: any) {
+                      console.error("Login failed", error);
+                      alert(`Login failed: ${error.message || 'Check your credentials'}`);
+                    }
+                  } else {
+                    alert("Please enter both email and password.");
+                  }
                 }}
                 className="luna-button-primary w-full py-4"
               >

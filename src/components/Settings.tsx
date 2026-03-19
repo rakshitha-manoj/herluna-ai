@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useLuna } from '../LunaContext';
 import { motion, AnimatePresence } from 'motion/react';
-import { Settings as SettingsIcon, Moon, Shield, Download, FileText, Heart, Trash2, ChevronRight, User, Mail, Activity, Database, LogIn, LogOut, X } from 'lucide-react';
+import { Settings as SettingsIcon, Moon, Shield, Download, FileText, Heart, Trash2, ChevronRight, User, Mail, Activity, Database, LogIn, LogOut, X, Sparkles } from 'lucide-react';
 
 export const Settings: React.FC = () => {
   const { profile, setProfile, logs, user, login, logout, resetAllData } = useLuna();

@@ -32,8 +32,19 @@ anomaly_model = SymptomAutoencoder()
 forecaster = MultiTaskForecaster()
 rag_service = RAGService()
 
-# Initialize Gemini
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# Initialize Gemini with Rotation Pool
+API_KEYS = [
+    "AIzaSyCRKpTa_hx6LG22LrRJZCqBgRzIicoHOx8",
+    "AIzaSyB--9AenCJMlrWgxIWawXiixXY9dCgG84I",
+    "AIzaSyBl72nCR0EV8wv5TaPl7DdH3iPFmxV7LPo",
+    "AIzaSyCct3ufm5Vlu_2EOt7X0MvLDnL3wtFMNkk"
+]
+current_key_state = {"index": 0}
+
+def get_next_gemini_key():
+    key = API_KEYS[current_key_state["index"]]
+    current_key_state["index"] = (current_key_state["index"] + 1) % len(API_KEYS)
+    return key
 
 class UserProfile(BaseModel):
     age: int
@@ -141,11 +152,12 @@ Guidelines:
     # Add current question
     contents.append({"role": "user", "parts": [{"text": request.question}]})
 
-    # Try Gemini API
-    if GEMINI_API_KEY:
-        for model_name in ["gemini-2.0-flash", "gemini-1.5-flash"]:
+    # Try Gemini API with Key Rotation
+    for _ in range(len(API_KEYS)):
+        api_key = get_next_gemini_key()
+        for model_name in ["gemini-1.5-flash", "gemini-2.0-flash"]:
             try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
                 resp = http_requests.post(url, json={"contents": contents}, timeout=15)
                 
                 if resp.status_code == 200:
@@ -154,15 +166,15 @@ Guidelines:
                     if text:
                         return {"response": text, "source": f"gemini-{model_name}"}
                 elif resp.status_code == 429:
-                    print(f"[Luna] {model_name} rate limited, trying next...")
+                    print(f"[Luna] {model_name} rate limited with key {api_key[:10]}..., trying next key/model")
                     continue
                 else:
-                    print(f"[Luna] {model_name} error: {resp.status_code} {resp.text[:200]}")
+                    print(f"[Luna] {model_name} error: {resp.status_code}")
             except Exception as e:
                 print(f"[Luna] {model_name} exception: {e}")
 
     # Fallback: Generate a contextual response from RAG knowledge base
-    print("[Luna] All Gemini models unavailable, using RAG fallback")
+    print("[Luna] All Gemini keys/models unavailable, using RAG fallback")
     fallback_response = generate_rag_fallback(request.question, request.profile, request.logs)
     return {"response": fallback_response, "source": "rag-fallback"}
 

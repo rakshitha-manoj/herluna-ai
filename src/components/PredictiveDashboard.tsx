@@ -1,5 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
+import { useLuna } from '../LunaContext';
 import { Brain, Zap, Activity, Clock, AlertCircle, TrendingUp, Sparkles } from 'lucide-react';
 import { Prediction } from '../types';
 
@@ -9,6 +10,26 @@ interface PredictiveDashboardProps {
 }
 
 export const PredictiveDashboard: React.FC<PredictiveDashboardProps> = ({ predictions, refreshing }) => {
+  const { logs } = useLuna();
+  
+  // Calculate real Phase Optimization from last 3 logged days
+  let optimizationScore = 65; // Safe default
+  if (logs.length > 0) {
+    const recentLogs = [...logs].sort((a,b)=>new Date(b.date).getTime()-new Date(a.date).getTime()).slice(0, 3);
+    let totalScore = 0;
+    recentLogs.forEach(l => {
+      let dailyScore = 40; // Base score out of 100
+      if (l.sleep >= 7.5) dailyScore += 20;
+      else if (l.sleep >= 6) dailyScore += 10;
+      if (l.hydration >= 8) dailyScore += 20;
+      else if (l.hydration >= 4) dailyScore += 10;
+      if (l.stress <= 5) dailyScore += 10;
+      if (l.energy >= 7) dailyScore += 10;
+      totalScore += Math.min(100, dailyScore);
+    });
+    optimizationScore = Math.round(totalScore / recentLogs.length);
+  }
+
   const getIcon = (type: string) => {
     switch (type) {
       case 'Mood': return <Brain className="w-5 h-5" />;
@@ -73,11 +94,11 @@ export const PredictiveDashboard: React.FC<PredictiveDashboardProps> = ({ predic
         <div className="space-y-1">
           <h4 className="text-[10px] uppercase font-bold tracking-[0.2em] opacity-40">Phase Optimization</h4>
           <div className="flex items-baseline gap-1">
-            <span className="text-4xl font-sans font-bold text-luna-purple">72</span>
+            <span className="text-4xl font-sans font-bold text-luna-purple">{optimizationScore}</span>
             <span className="text-lg font-bold text-luna-purple opacity-30">%</span>
           </div>
           <p className="text-[10px] text-luna-purple/60 leading-relaxed max-w-[180px]">
-            Your lifestyle is 72% aligned with your current phase.
+            Your lifestyle is {optimizationScore}% aligned with your current phase.
           </p>
         </div>
         <div className="relative w-20 h-20">
@@ -87,7 +108,7 @@ export const PredictiveDashboard: React.FC<PredictiveDashboardProps> = ({ predic
               cx="40" cy="40" r="36" fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round"
               strokeDasharray="226.2"
               initial={{ strokeDashoffset: 226.2 }}
-              animate={{ strokeDashoffset: 226.2 * (1 - 0.72) }}
+              animate={{ strokeDashoffset: 226.2 * (1 - (optimizationScore / 100)) }}
               transition={{ duration: 1.5, ease: "easeOut" }}
               className="text-luna-purple"
             />

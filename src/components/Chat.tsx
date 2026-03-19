@@ -1,105 +1,125 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useLuna } from '../LunaContext';
-import { motion, AnimatePresence } from 'motion/react';
-import { Send, Sparkles, User, Bot, Loader2, Info, Brain, ChevronRight } from 'lucide-react';
-import { format } from 'date-fns';
+import { motion } from 'motion/react';
+import { Send, Sparkles, User, Bot, Loader2, Info, Brain, ChevronRight, Trash2 } from 'lucide-react';
 import { getPhase, ChatMessage } from '../types';
 import { askAssistant } from '../services/ai';
 
-const CycleInsight: React.FC<{ profile: any, logs: any[] }> = ({ profile, logs }) => {
-  const today = new Date();
-  const lastStart = new Date(profile?.lastPeriodStart || today);
-  const cycleLen = profile?.cycleLength || 28;
-  const phase = getPhase(today, lastStart, cycleLen, profile?.activePeriodStart);
-
-  return (
-    <motion.div 
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="bg-luna-purple/5 border border-luna-purple/10 rounded-[32px] p-8 space-y-4 mb-12"
-    >
-      <div className="flex items-center gap-2 text-luna-purple">
-        <Sparkles className="w-4 h-4" />
-        <h3 className="font-bold uppercase tracking-widest text-[10px]">Neural Insight</h3>
-      </div>
-      <h2 className="text-2xl font-serif text-luna-purple">You are currently in your {phase} phase.</h2>
-      <p className="text-xs text-luna-purple/60 leading-relaxed">
-        {phase === 'Luteal' ? "Progesterone is rising, which can lead to increased introspection and sensitivity. Focus on magnesium-rich foods and restorative movement." : 
-         phase === 'Follicular' ? "Estrogen is climbing, boosting your energy and cognitive clarity. This is an ideal time for high-intensity training and complex problem-solving." :
-         phase === 'Ovulatory' ? "You are at your hormonal peak. Social confidence and physical energy are maximized. Prioritize vibrant, fresh foods." :
-         "Your body is in a state of renewal. Prioritize iron-rich foods, deep rest, and gentle stretching to support your system."}
-      </p>
-      <div className="pt-2">
-        <div className="flex items-center gap-2 text-[9px] font-sans uppercase tracking-widest text-luna-purple font-bold opacity-40">
-          <Brain className="w-3 h-3" />
-          Based on your last {logs.length} logs
-        </div>
-      </div>
-    </motion.div>
-  );
-};
-
+// Completely self-contained chat with its own local state to avoid any context crashes
 export const Chat: React.FC = () => {
-  const { profile, logs, chatMessages, addChatMessage } = useLuna();
+  const luna = useLuna();
+  const profile = luna?.profile;
+  const logs = luna?.logs || [];
+
+  // LOCAL chat state — does NOT rely on LunaContext for messages at all
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Load saved chat on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('luna_chat');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) setMessages(parsed);
+      }
+    } catch (e) {
+      console.warn('Failed to load chat history');
+    }
+  }, []);
+
+  // Scroll to bottom
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [chatMessages, loading]);
+  }, [messages, loading]);
+
+  const saveMessages = (msgs: ChatMessage[]) => {
+    try {
+      localStorage.setItem('luna_chat', JSON.stringify(msgs));
+    } catch (e) {
+      console.warn('Failed to save chat');
+    }
+  };
 
   const handleSend = async (textOverride?: string) => {
     const userMsg = textOverride || input.trim();
-    if (!userMsg || loading || !profile) return;
+    if (!userMsg || loading) return;
 
     const userMessage: ChatMessage = {
-      id: Date.now().toString(),
+      id: `u-${Date.now()}`,
       role: 'user',
       content: userMsg,
       timestamp: new Date().toISOString()
     };
 
+    const updated = [...messages, userMessage];
+    setMessages(updated);
+    saveMessages(updated);
     setInput('');
-    addChatMessage(userMessage);
     setLoading(true);
 
     try {
-      const botResponse = await askAssistant(userMsg, profile, logs, chatMessages);
-      
+      const botResponse = await askAssistant(userMsg, profile, logs, messages);
       const botMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
+        id: `b-${Date.now()}`,
         role: 'assistant',
-        content: botResponse || "I'm sorry, I couldn't process that.",
+        content: botResponse || "I'm here to help! Could you rephrase that?",
         timestamp: new Date().toISOString()
       };
-      
-      addChatMessage(botMessage);
+      const withBot = [...updated, botMessage];
+      setMessages(withBot);
+      saveMessages(withBot);
     } catch (error) {
-      console.error("Chat Error:", error);
-      const errorMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
+      console.error("Chat send error:", error);
+      const errMsg: ChatMessage = {
+        id: `e-${Date.now()}`,
         role: 'assistant',
-        content: "I'm sorry, I encountered an error. Please try again later.",
+        content: "Sorry, I hit an error. Please try again!",
         timestamp: new Date().toISOString()
       };
-      addChatMessage(errorMessage);
+      const withErr = [...updated, errMsg];
+      setMessages(withErr);
+      saveMessages(withErr);
     } finally {
       setLoading(false);
     }
   };
 
+  const clearHistory = () => {
+    setMessages([]);
+    localStorage.removeItem('luna_chat');
+  };
+
+  const phase = (() => {
+    try {
+      const today = new Date();
+      return getPhase(today, luna?.dynamicLastStart || today, luna?.dynamicCycleLength || 28, profile?.activePeriodStart);
+    } catch { return 'Follicular'; }
+  })();
+
   const SUGGESTIONS = [
-    "How should I adjust my diet for the Luteal phase?",
-    "Why am I feeling more anxious today?",
-    "Best workouts for high estrogen days?",
-    "How does caffeine affect my cycle?"
+    "How should I adjust my diet today?",
+    "Why am I feeling more anxious?",
+    "Best workouts for my current phase?",
+    "Tell me about PCOS"
   ];
 
+  const formatTime = (ts: string | undefined) => {
+    try {
+      if (!ts) return '';
+      const d = new Date(ts);
+      if (isNaN(d.getTime())) return '';
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch { return ''; }
+  };
+
   return (
-    <div className="flex flex-col h-screen bg-luna-cream pb-20 overflow-hidden">
+    <div className="flex flex-col h-full bg-luna-cream overflow-hidden">
+      {/* Header — clear button is on left, NOT overlapping the ChatBubble close button (top-right) */}
       <header className="px-6 py-4 bg-white border-b border-black/5 shrink-0 relative overflow-hidden">
         <div className="absolute top-0 right-0 w-48 h-48 bg-luna-purple/5 rounded-full -mr-24 -mt-24 blur-3xl" />
         <div className="relative z-10 flex justify-between items-center">
@@ -115,17 +135,43 @@ export const Chat: React.FC = () => {
               </div>
             </div>
           </div>
+          {messages.length > 0 && (
+            <button 
+              onClick={clearHistory}
+              className="p-2 bg-rose-50 text-rose-500 rounded-xl hover:bg-rose-100 transition-colors mr-12"
+              title="Clear Chat History"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </header>
 
+      {/* Messages */}
       <div 
         ref={scrollRef} 
-        className="flex-1 overflow-y-auto p-6 space-y-8 scroll-smooth"
-        style={{ scrollBehavior: 'smooth' }}
+        className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth"
       >
-        {chatMessages.length === 0 && (
+        {messages.length === 0 && (
           <>
-            <CycleInsight profile={profile} logs={logs} />
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-luna-purple/5 border border-luna-purple/10 rounded-[32px] p-8 space-y-4 mb-8"
+            >
+              <div className="flex items-center gap-2 text-luna-purple">
+                <Sparkles className="w-4 h-4" />
+                <h3 className="font-bold uppercase tracking-widest text-[10px]">Neural Insight</h3>
+              </div>
+              <h2 className="text-2xl font-serif text-luna-purple">You are currently in your {phase} phase.</h2>
+              <p className="text-xs text-luna-purple/60 leading-relaxed">
+                {phase === 'Luteal' ? "Progesterone is rising. Focus on magnesium-rich foods and restorative movement." : 
+                 phase === 'Follicular' ? "Estrogen is climbing, boosting energy and cognitive clarity." :
+                 phase === 'Ovulatory' ? "Hormonal peak — social confidence and physical energy are maximized." :
+                 "Your body is renewing. Prioritize iron-rich foods and gentle stretching."}
+              </p>
+            </motion.div>
+
             <div className="space-y-4">
               <p className="text-[9px] font-sans uppercase tracking-widest opacity-30 text-center">Suggested Inquiries</p>
               <div className="grid grid-cols-1 gap-2">
@@ -144,36 +190,33 @@ export const Chat: React.FC = () => {
           </>
         )}
 
-        {chatMessages.map((msg, i) => (
-          <motion.div 
-            key={msg.id}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
-            <div className={`flex gap-3 max-w-[85%] ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-sm ${
-                msg.role === 'user' 
-                  ? 'bg-luna-purple text-white' 
-                  : 'bg-white text-luna-purple border border-black/5'
-              }`}>
-                {msg.role === 'user' ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
-              </div>
-              <div className={`p-4 rounded-2xl text-sm leading-relaxed shadow-sm ${
-                msg.role === 'user' 
-                  ? 'bg-luna-purple text-white rounded-tr-none' 
-                  : 'bg-white border border-black/5 text-luna-purple rounded-tl-none'
-              }`}>
-                <div className="prose prose-sm max-w-none whitespace-pre-wrap">
-                  {msg.content}
+        {messages.map((msg, i) => {
+          if (!msg || !msg.content) return null;
+          const isUser = msg.role === 'user';
+          return (
+            <div 
+              key={msg.id || `m-${i}`}
+              className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
+            >
+              <div className={`flex gap-3 max-w-[85%] ${isUser ? 'flex-row-reverse' : ''}`}>
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-sm ${
+                  isUser ? 'bg-luna-purple text-white' : 'bg-white text-luna-purple border border-black/5'
+                }`}>
+                  {isUser ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
                 </div>
-                <div className={`text-[8px] mt-2 opacity-40 ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
-                  {format(new Date(msg.timestamp), 'HH:mm')}
+                <div className={`p-4 rounded-2xl text-sm leading-relaxed shadow-sm ${
+                  isUser ? 'bg-luna-purple text-white rounded-tr-none' : 'bg-white border border-black/5 text-luna-purple rounded-tl-none'
+                }`}>
+                  <div className="whitespace-pre-wrap">{msg.content}</div>
+                  <div className={`text-[8px] mt-2 opacity-40 ${isUser ? 'text-right' : 'text-left'}`}>
+                    {formatTime(msg.timestamp)}
+                  </div>
                 </div>
               </div>
             </div>
-          </motion.div>
-        ))}
+          );
+        })}
+
         {loading && (
           <div className="flex justify-start">
             <div className="flex gap-3">
@@ -189,6 +232,7 @@ export const Chat: React.FC = () => {
         )}
       </div>
 
+      {/* Input */}
       <div className="p-4 bg-white border-t border-black/5 shrink-0">
         <div className="max-w-4xl mx-auto relative">
           <input 
@@ -200,7 +244,7 @@ export const Chat: React.FC = () => {
             className="w-full h-12 pl-6 pr-14 bg-luna-cream/30 border border-black/5 rounded-full text-sm outline-none focus:border-luna-purple transition-all"
           />
           <button 
-            onClick={handleSend}
+            onClick={() => handleSend()}
             disabled={!input.trim() || loading}
             className="absolute right-1.5 top-1.5 w-9 h-9 bg-luna-purple text-white rounded-full flex items-center justify-center hover:scale-105 transition-transform disabled:opacity-50 disabled:scale-100 shadow-lg"
           >

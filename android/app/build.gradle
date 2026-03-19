@@ -22,9 +22,9 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
-    packaging {
+    packagingOptions {
         resources {
-            excludes += '/META-INF/versions/9/module-info.class'
+            excludes += ['META-INF/versions/9/module-info.class']
         }
     }
 }

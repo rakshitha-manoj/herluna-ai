@@ -11,7 +11,7 @@ import { format, subDays, isSameDay, parseISO } from 'date-fns';
 import { generateCycleSummary, analyzeSymptoms, getSymptomClusters, getHabitImpactPrediction } from '../services/ai';
 
 export const Insights: React.FC = () => {
-  const { logs, profile } = useLuna();
+  const { logs, profile, dynamicCycleLength, dynamicPeriodLength } = useLuna();
   const [summary, setSummary] = useState<string | null>(null);
   const [symptomAnalysis, setSymptomAnalysis] = useState<{ symptom: string, analysis: string }[]>([]);
   const [clusters, setClusters] = useState<{ cluster: string, symptoms: string[], insight: string }[]>([]);
@@ -90,33 +90,36 @@ export const Insights: React.FC = () => {
       });
     }
 
-    // Fallback to mock if not enough data
+    // Fallback if not enough data
     if (history.length < 2) {
       return [
-        { cycle: 'Jan', length: 28, period: 5 },
-        { cycle: 'Feb', length: 29, period: 6 },
-        { cycle: 'Mar', length: 27, period: 5 },
-        { cycle: 'Apr', length: 28, period: 4 },
-        { cycle: 'May', length: 30, period: 5 },
+        { cycle: 'Prev', length: dynamicCycleLength, period: dynamicPeriodLength },
+        { cycle: 'Last', length: dynamicCycleLength, period: dynamicPeriodLength }
       ];
     }
     return history.slice(-5);
-  }, [logs]);
+  }, [logs, dynamicCycleLength, dynamicPeriodLength]);
 
   const avgCycleLength = cycleHistoryData.length > 0 
     ? (cycleHistoryData.reduce((acc, c) => acc + c.length, 0) / cycleHistoryData.length).toFixed(1)
-    : "28.0";
+    : dynamicCycleLength.toString();
 
   const avgPeriodLength = cycleHistoryData.length > 0
     ? (cycleHistoryData.reduce((acc, c) => acc + c.period, 0) / cycleHistoryData.length).toFixed(1)
-    : "5.0";
+    : dynamicPeriodLength.toString();
+
+  const historicalLengths = cycleHistoryData.map(c => c.length);
+  const maxLen = Math.max(...(historicalLengths.length > 0 ? historicalLengths : [dynamicCycleLength]));
+  const minLen = Math.min(...(historicalLengths.length > 0 ? historicalLengths : [dynamicCycleLength]));
+  const variability = Math.round((maxLen - minLen) / 2);
+  const regularity = Math.max(0, 100 - (variability * 3));
 
   // Phase Duration Data
   const phaseData = [
-    { name: 'Menstrual', value: 5, fill: '#F43F5E' },
+    { name: 'Menstrual', value: dynamicPeriodLength, fill: '#F43F5E' },
     { name: 'Follicular', value: 8, fill: '#B2DFDB' },
     { name: 'Ovulatory', value: 3, fill: '#D1C4E9' },
-    { name: 'Luteal', value: (profile?.cycleLength || 28) - 16, fill: '#5D4063' },
+    { name: 'Luteal', value: dynamicCycleLength - 16, fill: '#5D4063' },
   ];
 
   // Radar Chart Data (Averages)
@@ -270,7 +273,7 @@ export const Insights: React.FC = () => {
               </ResponsiveContainer>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                 <span className="text-[10px] uppercase tracking-widest opacity-40 font-bold">Total</span>
-                <span className="text-2xl font-serif text-luna-purple">{profile?.cycleLength || 28}</span>
+                <span className="text-2xl font-serif text-luna-purple">{dynamicCycleLength}</span>
                 <span className="text-[10px] uppercase tracking-widest opacity-40 font-bold">Days</span>
               </div>
             </div>
@@ -378,7 +381,7 @@ export const Insights: React.FC = () => {
           </div>
           <div className="flex justify-between items-center text-[10px] font-bold uppercase tracking-widest opacity-40">
             <span>Average: {avgCycleLength} Days</span>
-            <span>Regularity: 94%</span>
+            <span>Regularity: {regularity}%</span>
           </div>
         </div>
 
@@ -519,12 +522,12 @@ export const Insights: React.FC = () => {
           <div className="bg-luna-teal/10 rounded-[24px] p-6 space-y-2">
             <TrendingUp className="w-5 h-5 text-teal-700" />
             <p className="text-[10px] font-bold uppercase tracking-wider opacity-50">Regularity</p>
-            <p className="text-2xl font-serif">94%</p>
+            <p className="text-2xl font-serif">{regularity}%</p>
           </div>
           <div className="bg-amber-50 rounded-[24px] p-6 space-y-2">
             <AlertCircle className="w-5 h-5 text-amber-700" />
             <p className="text-[10px] font-bold uppercase tracking-wider opacity-50">Variability</p>
-            <p className="text-2xl font-serif">±2 days</p>
+            <p className="text-2xl font-serif">±{variability} days</p>
           </div>
         </div>
 
